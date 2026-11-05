@@ -7,7 +7,7 @@
   "engines": { "node": ">=22.13.0" },
   "scripts": {
     "dev": "node --env-file=.env --import tsx src/server.ts",
-    "build": "tsc",
+    "build": "tsc --project tsconfig.build.json",
     "start": "node --env-file=.env dist/server.js",
     "start:container": "node dist/server.js",
     "typecheck": "tsc --project tsconfig.test.json",

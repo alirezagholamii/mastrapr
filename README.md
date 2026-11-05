@@ -70,6 +70,18 @@ docker compose logs -f reviewer
 
 Compose binds only `127.0.0.1:3000`; route your TLS proxy there. The container runs as an unprivileged user with a read-only filesystem. `HOST` and `PORT` are fixed to `0.0.0.0:3000` inside Compose.
 
+The build emits JavaScript with `tsconfig.build.json`, without full type checking, dependency type resolution, or declaration generation. This keeps compilation memory lower on a small VPS. CI runs the full `npm run typecheck` separately before testing, then builds with a 128 MB Node heap cap to guard against compilation-memory regressions. Total process memory exceeds heap memory; this is separate from the idle runtime memory target. For local source changes, run the typecheck on your development machine before deploying.
+
+If an older copy fails at `RUN npm run build` with `JavaScript heap out of memory`, copy the updated `package.json`, `tsconfig.build.json`, and `Dockerfile` to the VPS, then rebuild:
+
+```sh
+docker compose up --build -d
+docker compose logs --tail=50 reviewer
+curl http://127.0.0.1:3000/health
+```
+
+A healthy response is `{"status":"ok"}`. This confirms the application is running locally on the VPS. GitHub still needs a public HTTPS webhook URL forwarded to this service; the Docker build itself does not need a domain or an inbound port 443.
+
 Compose defaults Ollama to `http://host.docker.internal:11434/api`. Set `OLLAMA_BASE_URL_DOCKER` in `.env` to use a remote host or another container. Host Ollama must listen on a network interface reachable from the container; protect that interface from public access. Ollama itself is not started by this Compose file.
 
 ## Resource limits and reliability
