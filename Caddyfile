@@ -1,0 +1,3 @@
+review.example.com {
+    reverse_proxy reviewer:3000
+}

@@ -1,0 +1,24 @@
+# Copy this file to /root/caddy/docker-compose.yml on the VPS.
+# Requires the reviewer's existing network: mastrapr_default.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - reviewer
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  reviewer:
+    external: true
+    name: mastrapr_default
