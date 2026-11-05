@@ -6,7 +6,7 @@ Uses Ollama by default, or OpenAI through `.env`. No database, clone, shell tool
 
 See [Architecture](docs/architecture.md) for component responsibilities, the review lifecycle, security boundaries, and reliability constraints.
 
-See [Troubleshooting](docs/troubleshooting.md) for Docker, HTTPS, GitHub permission, and Ollama problems, with links to copyable plain-text commands.
+See [Troubleshooting](docs/troubleshooting.md) for Docker, HTTPS, GitHub permission, and Ollama problems, with diagnostic commands and fixes included.
 
 ## Requirements
 
@@ -61,7 +61,7 @@ OPENAI_MODEL=gpt-4.1-mini
 
 Switching providers requires a restart. The OpenAI path sends the PR title and selected diff to OpenAI. The Ollama path sends them to your configured Ollama endpoint. Neither agent has tools or access to the GitHub token. Source content is treated as untrusted input, and generated HTML/mentions are escaped in summaries. Model judgments still need human verification.
 
-Ollama uses a dedicated HTTP transport with header/body inactivity timeouts disabled; the job's `REVIEW_TIMEOUT_MS` still sets an absolute deadline. This permits slow local generation to exceed Node's default five-minute header wait when the review deadline allows it. GitHub and OpenAI keep their existing transports. On slow CPUs, lower diff limits as described in [ollama-slow-vps.txt](docs/ollama-slow-vps.txt); the deadline covers both sequential agents, so allowing a longer individual HTTP response alone may not be enough.
+Ollama uses a dedicated HTTP transport with header/body inactivity timeouts disabled; the job's `REVIEW_TIMEOUT_MS` still sets an absolute deadline. This permits slow local generation to exceed Node's default five-minute header wait when the review deadline allows it. GitHub and OpenAI keep their existing transports. On slow CPUs, lower diff limits as described in [Troubleshooting](docs/troubleshooting.md#slow-prompt-processing); the deadline covers both sequential agents, so allowing a longer individual HTTP response alone may not be enough.
 
 ## Docker
 
@@ -174,7 +174,7 @@ Webhooks receive `202` immediately. Queue saturation returns `503` with `Retry-A
 
 After an API failure, timeout, restart, or full queue, comment `/review` again or manually redeliver the webhook in GitHub. GitHub does not automatically retry failed deliveries. Inspect logs for the delivery ID and outcome. Errors are sanitized to keep tokens and source code out of logs; detailed upstream error payloads are intentionally suppressed. SIGTERM/SIGINT abort active work and discard queued work.
 
-Failures include a safe `stage`, `httpStatus` when available, and a recognized `errorCode`. Incomplete reviews log per-agent diagnostics as warnings. For deployment and interpretation steps, see [review-troubleshooting.txt](docs/review-troubleshooting.txt). A GitHub `403` can indicate insufficient access or rate limiting; consult [GitHub API troubleshooting](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) rather than assuming a single cause.
+Failures include a safe `stage`, `httpStatus` when available, and a recognized `errorCode`. Incomplete reviews log per-agent diagnostics as warnings. For deployment and interpretation steps, see [Troubleshooting](docs/troubleshooting.md#interpreting-reviewer-diagnostics). A GitHub `403` can indicate insufficient access or rate limiting; consult [GitHub API troubleshooting](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) rather than assuming a single cause.
 
 The application targets **under 150 MB RSS at idle**, using lazy workflow/provider imports and no storage or observability service. The target needs measurement on your deployment, including idle after a review; it is not a guaranteed memory ceiling. Compose allows 256 MB for import/review spikes. Ollama model memory is separate and generally far exceeds a tiny VPS's capacity: run it on another machine, or select OpenAI. The reviewer itself requires only Node.js at runtime.
 
