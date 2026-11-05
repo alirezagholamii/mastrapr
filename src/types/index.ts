@@ -61,8 +61,9 @@ export const reviewDiagnosticSchema = z.object({
   stage: z.enum(['startup', 'workflow', 'github-permissions', 'github-pr', 'github-diff', 'github-recheck',
     'agents-init', 'agent-security', 'agent-quality', 'github-summary', 'github-identity', 'github-comments', 'github-comment-write']),
   httpStatus: z.number().int().min(100).max(599).optional(),
-  errorCode: z.enum(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET',
-    'UND_ERR_CONNECT_TIMEOUT', 'ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ABORTED', 'INVALID_JSON', 'INVALID_OUTPUT']).optional(),
+  errorCode: z.enum(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+    'ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ABORTED', 'INVALID_JSON', 'INVALID_OUTPUT']).optional(),
 });
 export type ReviewDiagnostic = z.infer<typeof reviewDiagnosticSchema>;
 export type ReviewStage = ReviewDiagnostic['stage'];
@@ -74,15 +75,23 @@ export class ReviewFailure extends Error {
   constructor(stage: ReviewStage, error?: unknown) {
     super(`Review failed at ${stage}`);
     this.name = 'ReviewFailure';
-    const fields = error !== null && typeof error === 'object' ? error as Record<string, unknown> : {};
-    const cause = fields.cause !== null && typeof fields.cause === 'object' ? fields.cause as Record<string, unknown> : {};
-    const httpStatus = [fields.status, fields.statusCode].find(status =>
+    const levels: Record<string, unknown>[] = [];
+    const visited = new Set<object>();
+    let current = error;
+    // Mastra -> SDK -> fetch -> socket errors can wrap the useful code deeply.
+    while (current !== null && typeof current === 'object' && levels.length < 8 && !visited.has(current)) {
+      visited.add(current);
+      const fields = current as Record<string, unknown>;
+      levels.push(fields);
+      current = fields.cause;
+    }
+    const httpStatus = levels.flatMap(fields => [fields.status, fields.statusCode]).find(status =>
       typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599);
     const errorCodeSchema = reviewDiagnosticSchema.shape.errorCode;
-    const codes = [fields.code, cause.code,
+    const codes = levels.flatMap(fields => [fields.code,
       fields.name === 'AbortError' ? 'ABORTED' : undefined,
       fields.name === 'SyntaxError' ? 'INVALID_JSON' : undefined,
-      fields.name === 'ZodError' ? 'INVALID_OUTPUT' : undefined];
+      fields.name === 'ZodError' ? 'INVALID_OUTPUT' : undefined]);
     const errorCode = codes.map(code => errorCodeSchema.safeParse(code))
       .find(result => result.success && result.data !== undefined);
     this.diagnostic = reviewDiagnosticSchema.parse({ stage, httpStatus,

@@ -109,6 +109,7 @@ test('both failed checks produce an incomplete summary rather than a clean revie
   assert.match(f.posts[0]!, /Incomplete review/);
   assert.match(f.posts[0]!, /security check failed/);
   assert.match(f.posts[0]!, /quality check failed/);
+  assert.match(f.posts[0]!, /Neither check completed successfully/);
   assert.doesNotMatch(f.posts[0]!, /No actionable findings|private upstream payload/);
 });
 

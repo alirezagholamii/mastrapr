@@ -29,3 +29,15 @@ test('failure categories distinguish cancellation and invalid model output', () 
   const failure = new ReviewFailure('github-comment-write', { status: 403 });
   assert.equal(reviewFailure('github-summary', failure), failure, 'outer wrappers must preserve the precise operation');
 });
+
+test('deeply wrapped transport errors retain only the safe network code', () => {
+  const error = { message: 'private-source', cause: { cause: new TypeError('fetch failed', {
+    cause: { code: 'UND_ERR_HEADERS_TIMEOUT', requestBody: 'private-source' },
+  }) } };
+  assert.equal(new ReviewFailure('agent-security', error).diagnostic.errorCode, 'UND_ERR_HEADERS_TIMEOUT');
+  assert.equal(new ReviewFailure('agent-quality', { cause: { cause: { code: 'EHOSTUNREACH' } } }).diagnostic.errorCode, 'EHOSTUNREACH');
+  assert.doesNotMatch(JSON.stringify(new ReviewFailure('agent-quality', error)), /private-source/);
+  const cycle: { cause?: unknown } = {};
+  cycle.cause = cycle;
+  assert.doesNotThrow(() => new ReviewFailure('workflow', cycle));
+});

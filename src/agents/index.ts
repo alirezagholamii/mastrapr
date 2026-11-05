@@ -7,6 +7,23 @@ import { createQualityAgent } from './quality.js';
 
 export type AgentModel = ConstructorParameters<typeof Agent>[0]['model'];
 
+let ollamaFetch: typeof globalThis.fetch | undefined;
+
+/** Ollama may take longer than Node's default header timeout to return JSON. */
+async function getOllamaFetch(): Promise<typeof globalThis.fetch> {
+  if (!ollamaFetch) {
+    const { Agent: HttpAgent } = await import('undici');
+    // Keep one shared transport, scoped to Ollama. The job AbortSignal remains
+    // the absolute deadline, including loading, prompt processing, and generation.
+    const dispatcher = new HttpAgent({ headersTimeout: 0, bodyTimeout: 0, connections: 1 });
+    ollamaFetch = (input, init) => {
+      const options: RequestInit & { dispatcher: typeof dispatcher } = { ...init, dispatcher };
+      return globalThis.fetch(input, options);
+    };
+  }
+  return ollamaFetch;
+}
+
 export function parseAgentReport(text: string) {
   const json = text.trim().replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
   return agentReportSchema.parse(JSON.parse(json));
@@ -17,7 +34,7 @@ export async function createReviewAgents(config: Config): Promise<{ security: Re
   let model: AgentModel;
   if (config.LLM_PROVIDER === 'ollama') {
     const { createOllama } = await import('ollama-ai-provider');
-    model = createOllama({ baseURL: config.OLLAMA_BASE_URL })(config.OLLAMA_MODEL);
+    model = createOllama({ baseURL: config.OLLAMA_BASE_URL, fetch: await getOllamaFetch() })(config.OLLAMA_MODEL);
   } else {
     const { createOpenAI } = await import('@ai-sdk/openai');
     model = createOpenAI({ apiKey: config.OPENAI_API_KEY! })(config.OPENAI_MODEL);

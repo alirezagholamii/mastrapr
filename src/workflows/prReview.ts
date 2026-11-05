@@ -58,7 +58,8 @@ export function renderSummary(data: z.infer<typeof analyzedSchema>, provider: st
     `Reviewed ${data.diff.includedFiles} files; omitted ${data.diff.omittedFiles}; truncated ${data.diff.truncatedFiles}.`, ''];
   if (data.failures.length) lines.push(`**Incomplete review:** ${data.failures.map(safeMarkdown).join('; ')}. Retry with \`/review\`.`, '');
   if (!findings.length) {
-    lines.push(data.failures.length ? 'No findings from the completed checks.' : 'No actionable findings in the supplied diff.');
+    lines.push(data.failures.length >= 2 ? 'Neither check completed successfully. No code assessment is available.'
+      : data.failures.length ? 'No findings from the completed checks.' : 'No actionable findings in the supplied diff.');
   }
   for (const [index, finding] of findings.entries()) {
     const section = [`### ${finding.severity.toUpperCase()}: ${safeMarkdown(finding.title)}`,

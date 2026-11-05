@@ -6,6 +6,8 @@ Uses Ollama by default, or OpenAI through `.env`. No database, clone, shell tool
 
 See [Architecture](docs/architecture.md) for component responsibilities, the review lifecycle, security boundaries, and reliability constraints.
 
+See [Troubleshooting](docs/troubleshooting.md) for Docker, HTTPS, GitHub permission, and Ollama problems, with links to copyable plain-text commands.
+
 ## Requirements
 
 - Node.js **22.13+** (required by the pinned Mastra release; Node 24 is also supported).
@@ -59,6 +61,8 @@ OPENAI_MODEL=gpt-4.1-mini
 
 Switching providers requires a restart. The OpenAI path sends the PR title and selected diff to OpenAI. The Ollama path sends them to your configured Ollama endpoint. Neither agent has tools or access to the GitHub token. Source content is treated as untrusted input, and generated HTML/mentions are escaped in summaries. Model judgments still need human verification.
 
+Ollama uses a dedicated HTTP transport with header/body inactivity timeouts disabled; the job's `REVIEW_TIMEOUT_MS` still sets an absolute deadline. This permits slow local generation to exceed Node's default five-minute header wait when the review deadline allows it. GitHub and OpenAI keep their existing transports. On slow CPUs, lower diff limits as described in [ollama-slow-vps.txt](docs/ollama-slow-vps.txt); the deadline covers both sequential agents, so allowing a longer individual HTTP response alone may not be enough.
+
 ## Docker
 
 ```sh
@@ -68,7 +72,7 @@ docker compose up --build -d
 docker compose logs -f reviewer
 ```
 
-Compose binds only `127.0.0.1:3000`; route your TLS proxy there. The container runs as an unprivileged user with a read-only filesystem. `HOST` and `PORT` are fixed to `0.0.0.0:3000` inside Compose.
+Compose binds only `127.0.0.1:3000` on the host. A host-installed reverse proxy can forward to that address; a Caddy container can reach `reviewer:3000` through a shared Docker network as described below. The reviewer container runs as an unprivileged user with a read-only filesystem. `HOST` and `PORT` are fixed to `0.0.0.0:3000` inside Compose.
 
 The build emits JavaScript with `tsconfig.build.json`, without full type checking, dependency type resolution, or declaration generation. This keeps compilation memory lower on a small VPS. CI runs the full `npm run typecheck` separately before testing, then builds with a 128 MB Node heap cap to guard against compilation-memory regressions. Total process memory exceeds heap memory; this is separate from the idle runtime memory target. For local source changes, run the typecheck on your development machine before deploying.
 
@@ -83,6 +87,72 @@ curl http://127.0.0.1:3000/health
 A healthy response is `{"status":"ok"}`. This confirms the application is running locally on the VPS. GitHub still needs a public HTTPS webhook URL forwarded to this service; the Docker build itself does not need a domain or an inbound port 443.
 
 Compose defaults Ollama to `http://host.docker.internal:11434/api`. Set `OLLAMA_BASE_URL_DOCKER` in `.env` to use a remote host or another container. Host Ollama must listen on a network interface reachable from the container; protect that interface from public access. Ollama itself is not started by this Compose file.
+
+### HTTPS with Caddy in a separate Docker project
+
+You can run Caddy with Docker in its own directory, separately from this app. Caddy handles public HTTPS and forwards GitHub webhook requests to the reviewer:
+
+```text
+GitHub → HTTPS port 443 → Caddy container → reviewer:3000
+```
+
+Start the reviewer first using the commands above. Point a domain or subdomain, such as `review.example.com`, to your VPS and allow inbound TCP ports **80 and 443**. Caddy obtains and renews its HTTPS certificate automatically when the domain and connectivity are configured correctly.
+
+Because these are separate Compose projects, Caddy must join the reviewer's existing Docker network. From the **reviewer project directory**, find its network name:
+
+```sh
+docker inspect "$(docker compose ps -q reviewer)" --format '{{range $name, $settings := .NetworkSettings.Networks}}{{println $name}}{{end}}'
+```
+
+For example, a Compose project named `mastrapr` normally uses `mastrapr_default`. The name depends on your Compose project; use the value printed above.
+
+In a separate directory, such as `/root/caddy`, create a `Caddyfile`, replacing the example domain:
+
+```caddyfile
+review.example.com {
+    reverse_proxy reviewer:3000
+}
+```
+
+Create `docker-compose.yml` in that same Caddy directory. Replace `mastrapr_default` with the reviewer's actual network name:
+
+```yaml
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - reviewer
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  reviewer:
+    external: true
+    name: mastrapr_default
+```
+
+A copyable [standalone Caddy Compose file](docs/caddy-standalone-compose.yml) is also included. Certificate data persists in the `caddy_data` volume. If you already run Caddy, add this site's configuration and the reviewer network to that existing deployment rather than starting another proxy on ports 80/443.
+
+From the **Caddy directory**, start the proxy and check the public health endpoint:
+
+```sh
+docker compose up -d
+curl https://review.example.com/health
+```
+
+After replacing the example domain, the health check should return `{"status":"ok"}`. Use `https://review.example.com/webhook` as the GitHub webhook payload URL. The reviewer keeps its host port bound to loopback; Caddy communicates through Docker's network using the service name, without exposing port 3000 publicly.
+
+Manage the two projects independently: run reviewer commands in its project directory and Caddy commands in its own directory. The external reviewer network must exist before Caddy starts. See [Troubleshooting](docs/troubleshooting.md) for `502` responses or missing-network errors, and [Caddy's HTTPS guide](https://caddyserver.com/docs/quick-starts/https) for certificate setup details.
 
 ## Resource limits and reliability
 
