@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { loadConfig } from '../utils/config.js';
 import type { GitHubClient, PullRequestSnapshot, ReviewJob } from '../types/index.js';
+import { ReviewFailure } from '../types/index.js';
 import { createReviewRunner, renderSummary, validFindings } from './prReview.js';
 
 const config = loadConfig({ GITHUB_WEBHOOK_SECRET: 's'.repeat(32), GITHUB_TOKEN: 'test', GITHUB_REPOSITORIES: 'owner/repo' });
@@ -162,4 +163,31 @@ test('filters invented locations, merges duplicates, and escapes untrusted outpu
   assert.ok(!summary.includes('<img'));
   assert.ok(!summary.includes('@everyone'));
   assert.match(summary, /omitted 2; truncated 1/);
+});
+
+test('failed workflow steps retain the GitHub operation and status across Mastra execution', async () => {
+  for (const [stage, overrides] of [
+    ['github-permissions', { canReview: async () => { throw { status: 403, message: 'private-token' }; } }],
+    ['github-diff', { getFiles: async () => { throw { status: 401, message: 'private-token' }; } }],
+    ['github-comment-write', { postSummary: async () => { throw new ReviewFailure('github-comment-write', { status: 403 }); } }],
+  ] as const) {
+    const f = fixture(overrides);
+    await assert.rejects(createReviewRunner(config, f)(job, new AbortController().signal), error => {
+      assert.ok(error instanceof ReviewFailure);
+      assert.equal(error.diagnostic.stage, stage);
+      assert.equal(error.diagnostic.httpStatus, stage === 'github-diff' ? 401 : 403);
+      assert.doesNotMatch(error.message + JSON.stringify(error), /private-token/);
+      return true;
+    });
+  }
+});
+
+test('partial reviews return provider diagnostics without putting upstream details in the comment', async () => {
+  const f = fixture();
+  f.agents.quality.review = async () => { throw { statusCode: 401, message: 'private-provider-payload' }; };
+  const outcome = await createReviewRunner(config, f)(job, new AbortController().signal);
+  assert.equal(outcome.status, 'posted');
+  assert.equal(outcome.diagnostics?.[0]?.stage, 'agent-quality');
+  assert.equal(outcome.diagnostics?.[0]?.httpStatus, 401);
+  assert.doesNotMatch(f.posts[0]!, /private-provider-payload/);
 });

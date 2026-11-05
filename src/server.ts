@@ -5,6 +5,7 @@ import { loadConfig } from './utils/config.js';
 import type { Config } from './utils/config.js';
 import { verifySignature } from './utils/verifySignature.js';
 import type { ReviewJob, ReviewOutcome } from './types/index.js';
+import { reviewFailure } from './types/index.js';
 
 type Runner = (job: ReviewJob, signal: AbortSignal) => Promise<ReviewOutcome>;
 const issueCommentSchema = z.object({
@@ -20,7 +21,7 @@ function lazyRunner(config: Config): Runner {
   return async (job, signal) => {
     runner ??= Promise.all([import('./workflows/prReview.js'), import('./utils/github.js')])
       .then(([workflow, github]) => workflow.createReviewRunner(config, { github: github.createGitHubClient(config) }))
-      .catch(error => { runner = undefined; throw error; });
+      .catch(error => { runner = undefined; throw reviewFailure('startup', error); });
     signal.throwIfAborted();
     return (await runner)(job, signal);
   };
@@ -56,10 +57,15 @@ export function buildServer(config: Config, options: { runner?: Runner; logger?:
       try {
         const outcome = await runner(job, controller.signal);
         app.log.info({ deliveryId: job.deliveryId, status: outcome.status, reason: outcome.reason }, 'Review completed');
-      } catch {
+        if (outcome.diagnostics?.length) {
+          app.log.warn({ deliveryId: job.deliveryId, provider: config.LLM_PROVIDER, diagnostics: outcome.diagnostics }, 'Review completed with failed checks');
+        }
+      } catch (error) {
         deliveries.delete(job.deliveryId);
         // Do not log provider/Octokit errors: they can contain credentials and source code.
-        app.log.error({ deliveryId: job.deliveryId, timedOut: controller.signal.aborted }, 'Review failed; retry with /review or redeliver the webhook');
+        app.log.error({ deliveryId: job.deliveryId, timedOut: controller.signal.aborted,
+          provider: config.LLM_PROVIDER, ...reviewFailure('workflow', error).diagnostic },
+        'Review failed; check stage and status, then retry with /review');
       } finally {
         clearTimeout(timeout);
         shutdown.signal.removeEventListener('abort', abort);

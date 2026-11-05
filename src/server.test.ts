@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { buildServer } from './server.js';
 import { loadConfig } from './utils/config.js';
 import type { ReviewJob } from './types/index.js';
+import { ReviewFailure } from './types/index.js';
 
 const config = loadConfig({ GITHUB_WEBHOOK_SECRET: 's'.repeat(32), GITHUB_TOKEN: 'test', GITHUB_REPOSITORIES: 'owner/repo', MAX_QUEUE_SIZE: '1' });
 function payload() {
@@ -179,4 +180,38 @@ test('shutdown aborts an active review', async () => {
   await app.inject({ method: 'POST', url: '/webhook', payload: body, headers: signed(body) });
   await app.close();
   assert.equal(aborted, true);
+});
+
+test('failure logs expose safe stage and HTTP status without upstream messages or tokens', async t => {
+  const app = buildServer(config, { logger: false, runner: async () => {
+    throw new ReviewFailure('github-permissions', Object.assign(new Error('private-source'), {
+      status: 403, request: { headers: { authorization: 'private-token' } },
+    }));
+  } });
+  t.after(() => app.close());
+  const errorLog = t.mock.method(app.log, 'error');
+  const body = JSON.stringify(payload());
+  await app.inject({ method: 'POST', url: '/webhook', payload: body, headers: signed(body) });
+  await setImmediate();
+  assert.equal(errorLog.mock.calls.length, 1);
+  const log = errorLog.mock.calls[0]!.arguments[0] as Record<string, unknown>;
+  assert.equal(log.stage, 'github-permissions');
+  assert.equal(log.httpStatus, 403);
+  assert.equal(log.provider, 'ollama');
+  assert.equal(log.timedOut, false);
+  assert.doesNotMatch(JSON.stringify(errorLog.mock.calls[0]!.arguments), /private-source|private-token/);
+});
+
+test('partial reviews log sanitized per-agent diagnostics', async t => {
+  const app = buildServer(config, { logger: false, runner: async () => ({ status: 'posted',
+    diagnostics: [{ stage: 'agent-security', errorCode: 'ECONNREFUSED' }],
+  }) });
+  t.after(() => app.close());
+  const warningLog = t.mock.method(app.log, 'warn');
+  const body = JSON.stringify(payload());
+  await app.inject({ method: 'POST', url: '/webhook', payload: body, headers: signed(body) });
+  await setImmediate();
+  assert.equal(warningLog.mock.calls.length, 1);
+  const log = warningLog.mock.calls[0]!.arguments[0] as Record<string, unknown>;
+  assert.deepEqual(log.diagnostics, [{ stage: 'agent-security', errorCode: 'ECONNREFUSED' }]);
 });

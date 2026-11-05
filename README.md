@@ -104,6 +104,8 @@ Webhooks receive `202` immediately. Queue saturation returns `503` with `Retry-A
 
 After an API failure, timeout, restart, or full queue, comment `/review` again or manually redeliver the webhook in GitHub. GitHub does not automatically retry failed deliveries. Inspect logs for the delivery ID and outcome. Errors are sanitized to keep tokens and source code out of logs; detailed upstream error payloads are intentionally suppressed. SIGTERM/SIGINT abort active work and discard queued work.
 
+Failures include a safe `stage`, `httpStatus` when available, and a recognized `errorCode`. Incomplete reviews log per-agent diagnostics as warnings. For deployment and interpretation steps, see [review-troubleshooting.txt](docs/review-troubleshooting.txt). A GitHub `403` can indicate insufficient access or rate limiting; consult [GitHub API troubleshooting](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api) rather than assuming a single cause.
+
 The application targets **under 150 MB RSS at idle**, using lazy workflow/provider imports and no storage or observability service. The target needs measurement on your deployment, including idle after a review; it is not a guaranteed memory ceiling. Compose allows 256 MB for import/review spikes. Ollama model memory is separate and generally far exceeds a tiny VPS's capacity: run it on another machine, or select OpenAI. The reviewer itself requires only Node.js at runtime.
 
 ## Development and validation

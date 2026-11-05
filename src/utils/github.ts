@@ -2,10 +2,15 @@ import { Octokit } from '@octokit/rest';
 import type { Config } from './config.js';
 import type { ChangedFile, GitHubClient, ReviewJob } from '../types/index.js';
 
-import { COMMENT_MARKER } from '../types/index.js';
+import { COMMENT_MARKER, reviewFailure } from '../types/index.js';
+import type { ReviewStage } from '../types/index.js';
 export { COMMENT_MARKER } from '../types/index.js';
 
 export function createGitHubClient(config: Config): GitHubClient {
+  async function atStage<T>(stage: ReviewStage, operation: () => Promise<T>): Promise<T> {
+    try { return await operation(); }
+    catch (error) { throw reviewFailure(stage, error); }
+  }
   const octokit = new Octokit({
     auth: config.GITHUB_TOKEN,
     userAgent: 'mastra-pr-reviewer/0.1.0',
@@ -50,19 +55,21 @@ export function createGitHubClient(config: Config): GitHubClient {
       return files;
     },
     async postSummary(job, body, signal) {
-      const { data: me } = await octokit.users.getAuthenticated({ request: { signal } });
+      const { data: me } = await atStage('github-identity', () => octokit.users.getAuthenticated({ request: { signal } }));
       let existingId: number | undefined;
-      for await (const { data } of octokit.paginate.iterator(octokit.issues.listComments, {
-        ...params(job, signal), issue_number: job.pullNumber, per_page: 100,
-      })) {
-        signal.throwIfAborted();
-        const existing = data.find(comment => comment.user?.id === me.id && comment.body?.startsWith(COMMENT_MARKER));
-        if (existing) { existingId = existing.id; break; }
-      }
+      try {
+        for await (const { data } of octokit.paginate.iterator(octokit.issues.listComments, {
+          ...params(job, signal), issue_number: job.pullNumber, per_page: 100,
+        })) {
+          signal.throwIfAborted();
+          const existing = data.find(comment => comment.user?.id === me.id && comment.body?.startsWith(COMMENT_MARKER));
+          if (existing) { existingId = existing.id; break; }
+        }
+      } catch (error) { throw reviewFailure('github-comments', error); }
       if (existingId) {
-        await octokit.issues.updateComment({ ...params(job, signal), comment_id: existingId, body });
+        await atStage('github-comment-write', () => octokit.issues.updateComment({ ...params(job, signal), comment_id: existingId!, body }));
       } else {
-        await octokit.issues.createComment({ ...params(job, signal), issue_number: job.pullNumber, body });
+        await atStage('github-comment-write', () => octokit.issues.createComment({ ...params(job, signal), issue_number: job.pullNumber, body }));
       }
     },
   };

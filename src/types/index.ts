@@ -57,4 +57,45 @@ export interface GitHubClient {
   postSummary(job: ReviewJob, body: string, signal: AbortSignal): Promise<void>;
 }
 
-export type ReviewOutcome = { status: 'posted' | 'skipped'; reason?: string | undefined };
+export const reviewDiagnosticSchema = z.object({
+  stage: z.enum(['startup', 'workflow', 'github-permissions', 'github-pr', 'github-diff', 'github-recheck',
+    'agents-init', 'agent-security', 'agent-quality', 'github-summary', 'github-identity', 'github-comments', 'github-comment-write']),
+  httpStatus: z.number().int().min(100).max(599).optional(),
+  errorCode: z.enum(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET',
+    'UND_ERR_CONNECT_TIMEOUT', 'ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND', 'ABORTED', 'INVALID_JSON', 'INVALID_OUTPUT']).optional(),
+});
+export type ReviewDiagnostic = z.infer<typeof reviewDiagnosticSchema>;
+export type ReviewStage = ReviewDiagnostic['stage'];
+
+/** Retain only diagnostic fields that cannot contain credentials, URLs, or source. */
+export class ReviewFailure extends Error {
+  readonly diagnostic: ReviewDiagnostic;
+
+  constructor(stage: ReviewStage, error?: unknown) {
+    super(`Review failed at ${stage}`);
+    this.name = 'ReviewFailure';
+    const fields = error !== null && typeof error === 'object' ? error as Record<string, unknown> : {};
+    const cause = fields.cause !== null && typeof fields.cause === 'object' ? fields.cause as Record<string, unknown> : {};
+    const httpStatus = [fields.status, fields.statusCode].find(status =>
+      typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599);
+    const errorCodeSchema = reviewDiagnosticSchema.shape.errorCode;
+    const codes = [fields.code, cause.code,
+      fields.name === 'AbortError' ? 'ABORTED' : undefined,
+      fields.name === 'SyntaxError' ? 'INVALID_JSON' : undefined,
+      fields.name === 'ZodError' ? 'INVALID_OUTPUT' : undefined];
+    const errorCode = codes.map(code => errorCodeSchema.safeParse(code))
+      .find(result => result.success && result.data !== undefined);
+    this.diagnostic = reviewDiagnosticSchema.parse({ stage, httpStatus,
+      errorCode: errorCode?.success ? errorCode.data : undefined });
+  }
+}
+
+export function reviewFailure(stage: ReviewStage, error: unknown): ReviewFailure {
+  return error instanceof ReviewFailure ? error : new ReviewFailure(stage, error);
+}
+
+export type ReviewOutcome = {
+  status: 'posted' | 'skipped';
+  reason?: string | undefined;
+  diagnostics?: ReviewDiagnostic[] | undefined;
+};
